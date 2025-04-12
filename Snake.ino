@@ -1,366 +1,41 @@
 //لعبة الثعبان الجائع الكلاسيكيةعادت من جديد بشكل اخر في قناة الورشة 
 //التصميم و المخطط و الكود بحسابي على gethub 
-//
-#include "LedControl.h" // مكتبة LedControl تُستخدم للتحكم في مصفوفة LED. يمكن العثور عليها باستخدام مدير المكتبات أو تنزيلها كملف مضغوط من هنا: https://github.com/wayoda/LedControl
+// رابط الكود -- https://github.com/Warsha249/hungry-snake-game 
+//مكتبة (LedControl) موجوده على نفس الرابط 
+#include <LedControl.h>
 
-// --------------------------------------------------------------- //
-// ------------------------- إعدادات المستخدم --------------------- //
-// --------------------------------------------------------------- //
+// تعريف دبابيس التحكم
+#define BUZZER_PIN 3
+#define JOYSTICK_X A0
+#define JOYSTICK_Y A1
+#define JOYSTICK_BUTTON 2
+#define SPEED_POT A2
 
-// تعريف النغمات الموسيقية (ترددات النوتات)
-const int c = 261;
-const int d = 294;
-const int e = 329;
-const int f = 349;
-const int g = 391;
-const int gS = 415;
-const int a = 440;
-const int aS = 466;
-const int b = 494;
-const int cH = 523;
-const int cSH = 554;                 
-const int dH = 587;
-const int dSH = 622;
-const int eH = 659;
-const int fH = 698;
-const int fSH = 740;
-const int gH = 784;
-const int gSH = 830;
-const int aH = 880;
+// إعدادات شاشة LED
+const int MATRIX_SIZE = 8;
+const int MESSAGE_SPEED = 4;
+LedControl lc = LedControl(12, 11, 10, 1); // DIN, CLK, CS
 
-// تم تعريف جميع الأرجل (المخارج) هنا
-struct Pin {
-  static const short joystickX = A2;   // منفذ عصا التحكم محور X
-  static const short joystickY = A3;   // منفذ عصا التحكم محور Y
-  static const short joystickVCC = 15; // مزود طاقة افتراضي لعصا التحكم (المدخل التناظري 1) لجعل عصا التحكم قابلة للتوصيل مباشرة بجانب الأردوينو نانو VCC
-  static const short joystickGND = 14; // أرضي افتراضي لعصا التحكم (المدخل التناظري 0) لجعل عصا التحكم قابلة للتوصيل مباشرة بجانب الأردوينو نانو GND
+// متغيرات اللعبة
+int snakeX[64], snakeY[64];
+int snakeLength = 3;
+int foodX, foodY;
+int direction = 0; // 0=يمين, 1=يسار, 2=أعلى, 3=أسفل
+int lastDirection = 0;
+bool gameOver = false;
+bool win = false;
+unsigned long lastMoveTime = 0;
+int moveDelay = 300;
+unsigned long lastFoodBlink = 0;
+bool foodVisible = true;
+const int foodBlinkInterval = 300;
 
-  static const short potentiometer = A5; // مقياس الجهد للتحكم في سرعة الثعبان
+// تعريفات الأصوات
+const int shortBeep = 800;
+const int longBeep = 600;
 
-  static const short CLK = 10;   // إشارة الساعة لمصفوفة LED
-  static const short CS  = 11;   // إشارة اختيار الشريحة لمصفوفة LED
-  static const short DIN = 12;   // إدخال البيانات لمصفوفة LED
-  
-  static const short buzzerPin = 6;  // منفذ الجرس (البيزر)
-};
-
-// سطوع مصفوفة LED: يتراوح بين 0 (أكثر ظلمة) و 15 (أكثر سطوعًا)
-const short intensity = 4;
-
-// كلما كان الرقم أصغر، كلما كان تمرير الرسالة أسرع
-const short messageSpeed = 4;
-
-// الطول الابتدائي للثعبان (1...63، يُوصى بـ 3)
-const short initialSnakeLength = 3;
-
-// --------------------------------------------------------------- //
-// ------------------------- الإعدادات الأولية -------------------- //
-// --------------------------------------------------------------- //
-
-void setup() {
-  Serial.begin(115200);  // تعيين معدل البود على شاشة المراقبة التسلسلية
-  initialize();         // تهيئة المنافذ ومصفوفة الليدات
-  calibrateJoystick(); // معايرة وضع عصا التحكم الأساسي (لا تلمسها)
-  showSnakeMessage(); // عرض رسالة (SNAKE)
-  startSound();      // تشغيل صوت البداية
-}
-
-// --------------------------------------------------------------- //
-// ------------------------- الحلقة الرئيسية ---------------------- //
-// --------------------------------------------------------------- //
-
-void loop() {
-  generateFood();    // إذا لم يكن هناك طعام، قم بإنشائه، وتحقق أيضًا من حالة الفوز
-  scanJoystick();    // مراقبة تحركات عصا التحكم ولمعان الطعام
-  calculateSnake();  // حساب تحركات الثعبان
-  handleGameStates(); // إدارة حالات اللعبة (الفوز أو الخسارة)
-
-  // قم بإلغاء التعليق إذا كنت تريد طباعة لوحة اللعبة الحالية إلى المنفذ التسلسلي (قد يؤدي إلى إبطاء اللعبة قليلاً)
-  // dumpGameBoard(); 
-}
-
-// --------------------------------------------------------------- //
-// -------------------- المتغيرات المساعدة ---------------------- //
-// --------------------------------------------------------------- //
-
-LedControl matrix(Pin::DIN, Pin::CLK, Pin::CS, 1);
-
-struct Point {
-  int row = 0, col = 0;
-  Point(int row = 0, int col = 0): row(row), col(col) {}
-};
-
-struct Coordinate {
-  int x = 0, y = 0;
-  Coordinate(int x = 0, int y = 0): x(x), y(y) {}
-};
-
-bool win = false;      // حالة الفوز
-bool gameOver = false; // حالة انتهاء اللعبة
-
-// إحداثيات رأس الثعبان (سيتم توليدها عشوائيًا)
-Point snake;
-
-// الطعام غير موجود في أي مكان بعد
-Point food(-1, -1);
-
-// إحداثيات عصا التحكم في الوضع الأساسي (سيتم تعيينها أثناء المعايرة)
-Coordinate joystickHome(500, 500);
-
-// معلمات الثعبان
-int snakeLength = initialSnakeLength; // الطول الابتدائي للثعبان
-int snakeSpeed = 1; // السرعة الحالية للثعبان (سيتم تعيينها بناءً على قيمة مقياس الجهد)
-int snakeDirection = 0; // اتجاه الثعبان (0 يعني عدم الحركة)
-
-// ثوابت الاتجاهات
-const short up     = 1;
-const short right  = 2;
-const short down   = 3; // 'down - 2' يجب أن يكون 'up'
-const short left   = 4; // 'left - 2' يجب أن يكون 'right'
-
-// الحد الأدنى لحركة عصا التحكم ليتم اعتبارها
-const int joystickThreshold = 200;
-
-// التدرج اللوغاريتمي لمقياس الجهد (-1 = خطي، 1 = طبيعي، أكبر = أكثر حدة)
-const float logarithmity = 0.4;
-
-// مصفوفة العمر: تحتفظ بـ "عمر" كل بكسل في المصفوفة. إذا كان العمر > 0، فإن البكسل مضاء.
-// في كل إطار، يتم زيادة عمر جميع البكسلات المضاءة.
-// عندما يتجاوز عمر بعض البكسلات طول الثعبان، يتم إطفاؤها.
-// يتم إضافة عمر 1 في اتجاه الثعبان الحالي بجوار آخر موقع لرأس الثعبان.
-int age[8][8] = {};
-
-// --------------------------------------------------------------- //
-// ------------------------- الدوال المساعدة --------------------- //
-// --------------------------------------------------------------- //
-
-// إذا لم يكن هناك طعام، قم بإنشائه، وتحقق أيضًا من حالة الفوز
-void generateFood() {
-  if (food.row == -1 || food.col == -1) {
-    // إذا كان طول الثعبان يساوي أو يتجاوز 64، يتم الفوز
-    if (snakeLength >= 64) {
-      win = true;
-      return; // منع توليد الطعام إذا تم الفوز
-    }
-
-    // توليد الطعام حتى يتم وضعه في مكان صحيح
-    do {
-      food.col = random(8);
-      food.row = random(8);
-    } while (age[food.row][food.col] > 0);
-  }
-}
-
-// دالة لوغاريتمية عكسية مخصصة مع تدرج متغير
-float lnx(float n) {
-  if(n < 0) return 0;
-  if(n > 1) return 1;
-  n = -log(-n * logarithmity + 1); // لوغاريتم طبيعي
-  if (isinf(n)) n = lnx(0.999999); // منع إرجاع 'inf'
-  return n;
-}
-
-// مراقبة تحركات عصا التحكم وإضاءة الطعام
-void scanJoystick() {
-  int previousDirection = snakeDirection; // حفظ الاتجاه السابق
-  long timestamp = millis() + snakeSpeed; // وقت عرض الإطار التالي
-
-  while (millis() < timestamp) {
-    // حساب سرعة الثعبان بشكل لوغاريتمي (10...1000ms)
-    float raw = mapf(analogRead(Pin::potentiometer), 0, 1023, 0, 1);
-    snakeSpeed = mapf(lnx(raw), lnx(0), lnx(1), 10, 1000);
-    if (snakeSpeed == 0) snakeSpeed = 1; // التأكد من أن السرعة لا تساوي صفر
-
-    // تحديد اتجاه الثعبان بناءً على حركة عصا التحكم
-    analogRead(Pin::joystickY) < joystickHome.y - joystickThreshold ? snakeDirection = right : 0;
-    analogRead(Pin::joystickY) > joystickHome.y + joystickThreshold ? snakeDirection = left  : 0;
-    analogRead(Pin::joystickX) < joystickHome.x - joystickThreshold ? snakeDirection = up    : 0;
-    analogRead(Pin::joystickX) > joystickHome.x + joystickThreshold ? snakeDirection = down  : 0;
-
-    // تجاهل تغيير الاتجاه بمقدار 180 درجة (لا تأثير إذا كان الثعبان لا يتحرك)
-    snakeDirection + 2 == previousDirection && previousDirection != 0 ? snakeDirection = previousDirection : 0;
-    snakeDirection - 2 == previousDirection && previousDirection != 0 ? snakeDirection = previousDirection : 0;
-
-    // إضاءة الطعام بشكل متقطع
-    matrix.setLed(0, food.row, food.col, millis() % 100 < 50 ? 1 : 1);
-  }
-}
-
-// حساب حركة الثعبان
-void calculateSnake() {
-  switch (snakeDirection) {
-  case up:
-    snake.row--;
-    fixEdge();
-    matrix.setLed(0, snake.row, snake.col, 1);
-    break;
-
-  case right:
-    snake.col++;
-    fixEdge();
-    matrix.setLed(0, snake.row, snake.col, 1);
-    break;
-
-  case down:
-    snake.row++;
-    fixEdge();
-    matrix.setLed(0, snake.row, snake.col, 1);
-    break;
-
-  case left:
-    snake.col--;
-    fixEdge();
-    matrix.setLed(0, snake.row, snake.col, 1);
-    break;
-
-  default: // إذا كان الثعبان لا يتحرك، يتم الخروج
-    return;
-  }
-
-  // إذا كان هناك أي عمر (جسم الثعبان)، سيؤدي ذلك إلى انتهاء اللعبة (يجب أن يتحرك الثعبان)
-  if (age[snake.row][snake.col] != 0 && snakeDirection != 0) {
-    gamoverSound();
-    gameOver = true;
-    return;
-  }
-
-  // التحقق من أكل الطعام
-  if (snake.row == food.row && snake.col == food.col) {
-    beep(fH, 30);// صوت عند أكل الطعام
-    snakeLength++;
-    food.row = -1; // إعادة تعيين الطعام
-    food.col = -1;
-  }
-
-  // زيادة عمر جميع البكسلات المضاءة
-  updateAges();
-
-  // تغيير عمر رأس الثعبان من 0 إلى 1
-  age[snake.row][snake.col]++;
-}
-
-// إصلاح حواف المصفوفة لجعل الثعبان يظهر على الجانب الآخر إذا خرج من الحافة
-void fixEdge() {
-  snake.col < 0 ? snake.col += 8 : 0;
-  snake.col > 7 ? snake.col -= 8 : 0;
-  snake.row < 0 ? snake.row += 8 : 0;
-  snake.row > 7 ? snake.row -= 8 : 0;
-}
-
-// زيادة عمر البكسلات المضاءة وإطفاء البكسلات القديمة بناءً على طول الثعبان
-void updateAges() {
-  for (int row = 0; row < 8; row++) {
-    for (int col = 0; col < 8; col++) {
-      // إذا كان البكسل مضاء، يتم زيادة عمره
-      if (age[row][col] > 0 ) {
-        age[row][col]++;
-      }
-
-      // إذا تجاوز العمر طول الثعبان، يتم إطفاؤه
-      if (age[row][col] > snakeLength) {
-        matrix.setLed(0, row, col, 0);
-        age[row][col] = 0;
-      }
-    }
-  }
-}
-
-// إدارة حالات اللعبة (الفوز أو الخسارة)
-void handleGameStates() {
-  if (gameOver || win) {
-    unrollSnake(); // إظهار الثعبان بشكل متتالي
-    showScoreMessage(snakeLength); // عرض النقاط
-
-    if (gameOver) showGameOverMessage(); // عرض رسالة انتهاء اللعبة
-    else if (win) showWinMessage(); // عرض رسالة الفوز
-
-    // إعادة تهيئة اللعبة
-    win = false;
-    gameOver = false;
-    snake.row = random(8);
-    snake.col = random(8);
-    food.row = -1;
-    food.col = -1;
-    snakeLength = initialSnakeLength;
-    snakeDirection = 0;
-    startSound();
-    memset(age, 0, sizeof(age[0][0]) * 8 * 8);
-    matrix.clearDisplay(0);
-  }
-}
-
-// إظهار الثعبان بشكل متتالي عند انتهاء اللعبة
-void unrollSnake() {
-  // إطفاء LED الطعام
-  matrix.setLed(0, food.row, food.col, 0);
-
-  delay(600);
-
-  for (int i = 1; i <= snakeLength; i++) {
-    for (int row = 0; row < 8; row++) {
-      for (int col = 0; col < 8; col++) {
-        if (age[row][col] == i) {
-          matrix.setLed(0, row, col, 0);
-          delay(100);
-        }
-      }
-    }
-  }
-}
-
-// معايرة عصا التحكم
-void calibrateJoystick() {
-  Coordinate values;
-
-  for (int i = 0; i < 10; i++) {
-    values.x += analogRead(Pin::joystickX);
-    values.y += analogRead(Pin::joystickY);
-  }
-
-  joystickHome.x = values.x / 10;
-  joystickHome.y = values.y / 10;
-}
-
-// تهيئة المنافذ والمصفوفة
-void initialize() {
-  pinMode(Pin::joystickVCC, OUTPUT);
-  digitalWrite(Pin::joystickVCC, HIGH);
-
-  pinMode(Pin::joystickGND, OUTPUT);
-  digitalWrite(Pin::joystickGND, LOW);
-
-  matrix.shutdown(0, false);
-  matrix.setIntensity(0, intensity);
-  matrix.clearDisplay(0);
-
-  randomSeed(analogRead(A5));
-  snake.row = random(8);
-  snake.col = random(8);
-}
-
-// اظهار  لوحة اللعبة الحالية في المنفذ التسلسلي
-void dumpGameBoard() {
-  String buff = "\n\n\n";
-  for (int row = 0; row < 8; row++) {
-    for (int col = 0; col < 8; col++) {
-      if (age[row][col] < 10) buff += " ";
-      if (age[row][col] != 0) buff += age[row][col];
-      else if (col == food.col && row == food.row) buff += "@";
-      else buff += "-";
-      buff += " ";
-    }
-    buff += "\n";
-  }
-  Serial.println(buff);
-}
-
-// --------------------------------------------------------------- //
-// ------------------------- الرسائل ----------------------------- //
-// --------------------------------------------------------------- //
-
-// رسالة "SNAKE" عند البدء
-const PROGMEM bool hungrySnakeMessage[8][56] = {
-  // s  n  a  k  e
+// رسائل العرض
+const PROGMEM bool snakeMessage[8][56] = {
   {0,1,1,1,1,1,0,1,0,0,0,0,0,1,1,0,0,1,1,1,1,1,0,1,0,0,0,1,0,0,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
   {0,1,0,0,0,1,0,1,1,0,0,0,0,1,1,0,0,1,0,0,0,1,0,1,0,0,1,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
   {0,1,0,0,0,0,0,1,0,1,0,0,0,1,1,0,0,1,0,0,0,1,0,1,0,1,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
@@ -371,7 +46,6 @@ const PROGMEM bool hungrySnakeMessage[8][56] = {
   {0,1,1,1,1,1,0,1,0,0,0,0,0,1,1,0,0,1,0,0,0,1,0,1,0,0,0,0,1,0,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}
 };
 
-// رسالة "GAME OVER" عند الخسارة
 const PROGMEM bool gameOverMessage[8][90] = {
   {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
   {0,0,0,0,0,0,0,0,0,1,1,1,1,0,0,0,0,1,1,1,1,0,0,0,1,1,0,0,0,1,1,0,0,1,1,1,1,1,1,0,0,0,0,0,0,0,1,1,1,1,0,0,0,1,1,0,0,1,1,0,0,1,1,1,1,1,1,0,0,1,1,1,1,1,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0},
@@ -379,11 +53,10 @@ const PROGMEM bool gameOverMessage[8][90] = {
   {0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,1,1,0,0,1,1,1,1,1,1,1,0,0,1,1,0,0,0,0,0,0,0,0,0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,0,0,0,0,0,1,1,0,0,1,1,0,0,1,1,1,1,0,0,0,0,0,0,0,0},
   {0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,1,1,1,1,1,1,0,0,1,1,0,1,0,1,1,0,0,1,1,1,1,1,0,0,0,0,0,0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,1,1,1,0,0,0,1,1,1,1,1,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0},
   {0,0,0,0,0,0,0,0,1,1,0,1,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,0,0,1,1,0,0,1,1,0,0,0,0,0,0,0,0,0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,0,0,0,0,0,1,1,1,1,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0},
-  {0,0,0,0,0,0,0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,0,0,1,1,0,0,1,1,0,0,0,0,0,0,0,0,0,0,1,1,0,0,1,1,0,0,0,1,1,1,1,0,0,0,1,1,0,0,0,0,0,0,1,1,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-  {0,0,0,0,0,0,0,0,0,1,1,1,1,0,0,0,1,1,0,0,1,1,0,0,1,1,0,0,0,1,1,0,0,1,1,1,1,1,1,0,0,0,0,0,0,0,1,1,1,1,0,0,0,0,0,1,1,0,0,0,0,1,1,1,1,1,1,0,0,1,1,0,0,1,1,0,0,0,1,1,0,0,0,0,0,0,0,0,0}
+  {0,0,0,0,0,0,0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,0,0,1,1,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,0,0,0,0,1,1,1,1,0,0,0,1,1,0,0,0,0,0,0,1,1,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+  {0,0,0,0,0,0,0,0,0,1,1,1,1,0,0,0,1,1,0,0,1,1,0,0,1,1,0,0,0,1,1,0,0,1,1,1,1,1,1,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0,0,1,1,1,1,1,1,0,0,1,1,0,0,1,1,0,0,0,1,1,0,0,0,0,0,0,0,0,0}
 };
 
-// رسالة "SCORE" مع الأرقام
 const PROGMEM bool scoreMessage[8][58] = {
   {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
   {0,0,0,0,0,0,0,0,0,1,1,1,1,0,0,0,0,1,1,1,1,0,0,0,0,1,1,1,1,0,0,0,1,1,1,1,1,0,0,0,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0},
@@ -395,7 +68,6 @@ const PROGMEM bool scoreMessage[8][58] = {
   {0,0,0,0,0,0,0,0,0,1,1,1,1,0,0,0,0,1,1,1,1,0,0,0,0,1,1,1,1,0,0,0,1,1,0,0,1,1,0,0,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0}
 };
 
-// تعريف الأرقام (0-9)
 const PROGMEM bool digits[][8][8] = {
   {
     {0,0,0,0,0,0,0,0},
@@ -499,104 +171,264 @@ const PROGMEM bool digits[][8][8] = {
   }
 };
 
-// عرض رسالة "SNAKE"
-void showSnakeMessage() {
-  for (int d = 0; d < sizeof(hungrySnakeMessage[0]) - 7; d++) {
-    for (int col = 0; col < 8; col++) {
-      delay(messageSpeed);
-      for (int row = 0; row < 8; row++) {
-        matrix.setLed(0, row, col, pgm_read_byte(&(hungrySnakeMessage[row][col + d])));
-      }
+void setup() {
+  Serial.begin(9600);
+  lc.shutdown(0, false);
+  lc.setIntensity(0, 8);
+  lc.clearDisplay(0);
+  pinMode(JOYSTICK_BUTTON, INPUT_PULLUP);
+  pinMode(BUZZER_PIN, OUTPUT);
+  showSnakeMessage();
+  playStartSound();
+  startGame();
+}
+
+void loop() {
+  if (!gameOver && !win) {
+    readJoystick();
+    if (millis() - lastMoveTime > moveDelay) {
+      moveSnake();
+      drawSnake();
+      lastMoveTime = millis();
     }
+    updateFoodBlink();
+  } else {
+    if (gameOver) {
+      unrollSnake();
+      showScoreMessage(snakeLength);
+      showGameOverMessage();
+    } else if (win) {
+      unrollSnake();
+      showScoreMessage(snakeLength);
+    }
+    while (digitalRead(JOYSTICK_BUTTON) == HIGH) delay(100);
+    delay(200);
+    startGame();
   }
 }
 
-// عرض رسالة "GAME OVER"
+void startGame() {
+  snakeLength = 3;
+  for (int i = 0; i < snakeLength; i++) {
+    snakeX[i] = 3 - i;
+    snakeY[i] = 3;
+  }
+  generateFood();
+  direction = 0;
+  lastDirection = 0;
+  gameOver = false;
+  win = false;
+  foodVisible = true;
+  lc.clearDisplay(0);
+  drawSnake();
+  drawFood();
+}
+
+void generateFood() {
+  bool onSnake;
+  do {
+    onSnake = false;
+    foodX = random(0, MATRIX_SIZE);
+    foodY = random(0, MATRIX_SIZE);
+    for (int i = 0; i < snakeLength; i++) {
+      if (snakeX[i] == foodX && snakeY[i] == foodY) {
+        onSnake = true;
+        break;
+      }
+    }
+  } while (onSnake);
+  foodVisible = true;
+  lastFoodBlink = millis();
+}
+
+void drawSnake() {
+  lc.clearDisplay(0);
+  for (int i = 0; i < snakeLength; i++) {
+    lc.setLed(0, snakeY[i], snakeX[i], true);
+  }
+  if(foodVisible) drawFood();
+}
+
+void drawFood() {
+  lc.setLed(0, foodY, foodX, true);
+}
+
+void readJoystick() {
+  int xValue = analogRead(JOYSTICK_X);
+  int yValue = analogRead(JOYSTICK_Y);
+  
+  if (xValue < 300 && lastDirection != 0) direction = 1;
+  else if (xValue > 700 && lastDirection != 1) direction = 0;
+  else if (yValue < 300 && lastDirection != 3) direction = 2;
+  else if (yValue > 700 && lastDirection != 2) direction = 3;
+  
+  moveDelay = map(analogRead(SPEED_POT), 0, 1023, 100, 500);
+  
+  if (digitalRead(JOYSTICK_BUTTON) == LOW && gameOver) {
+    delay(200);
+    startGame();
+  }
+}
+
+void moveSnake() {
+  int prevX = snakeX[0];
+  int prevY = snakeY[0];
+  int newX = prevX;
+  int newY = prevY;
+  
+  switch (direction) {
+    case 0: newX++; break;
+    case 1: newX--; break;
+    case 2: newY--; break;
+    case 3: newY++; break;
+  }
+  
+  if (newX < 0) newX = MATRIX_SIZE - 1;
+  if (newX >= MATRIX_SIZE) newX = 0;
+  if (newY < 0) newY = MATRIX_SIZE - 1;
+  if (newY >= MATRIX_SIZE) newY = 0;
+  
+  for (int i = 0; i < snakeLength; i++) {
+    if (snakeX[i] == newX && snakeY[i] == newY) {
+      gameOver = true;
+      playGameOverSound();
+      return;
+    }
+  }
+  
+  bool ateFood = (newX == foodX && newY == foodY);
+  if (ateFood) {
+    snakeLength++;
+    playEatSound();
+    generateFood();
+    if (snakeLength >= 64) win = true;
+  }
+  
+  for (int i = snakeLength - 1; i > 0; i--) {
+    snakeX[i] = snakeX[i - 1];
+    snakeY[i] = snakeY[i - 1];
+  }
+  
+  snakeX[0] = newX;
+  snakeY[0] = newY;
+  
+  if (!ateFood) lc.setLed(0, snakeY[snakeLength], snakeX[snakeLength], false);
+  lastDirection = direction;
+}
+
+void updateFoodBlink() {
+  if (millis() - lastFoodBlink > foodBlinkInterval) {
+    foodVisible = !foodVisible;
+    lastFoodBlink = millis();
+    if(foodVisible) drawFood();
+    else lc.setLed(0, foodY, foodX, false);
+  }
+}
+
+void playStartSound() {
+  tone(BUZZER_PIN, shortBeep, 100);
+  delay(100);
+  tone(BUZZER_PIN, shortBeep, 100);
+  delay(100);
+  tone(BUZZER_PIN, longBeep, 200);
+  delay(200);
+  noTone(BUZZER_PIN);
+  delay(100);
+  tone(BUZZER_PIN, shortBeep, 100);
+  delay(100);
+  tone(BUZZER_PIN, shortBeep, 100);
+  delay(100);
+  tone(BUZZER_PIN, longBeep, 200);
+  delay(200);
+  noTone(BUZZER_PIN);
+}
+
+void playEatSound() {
+  tone(BUZZER_PIN, shortBeep, 50);
+  delay(50);
+  tone(BUZZER_PIN, shortBeep+200, 50);
+  delay(50);
+  noTone(BUZZER_PIN);
+}
+
+void playGameOverSound() {
+  tone(BUZZER_PIN, longBeep, 300);
+  delay(300);
+  tone(BUZZER_PIN, longBeep-200, 500);
+  delay(500);
+  noTone(BUZZER_PIN);
+}
+
+void showSnakeMessage() {
+  for (int d = 0; d < sizeof(snakeMessage[0]) - 7; d++) {
+    for (int col = 0; col < 8; col++) {
+      delay(MESSAGE_SPEED);
+      for (int row = 0; row < 8; row++) {
+        lc.setLed(0, row, col, pgm_read_byte(&(snakeMessage[row][col + d])));
+      }
+    }
+  }
+  lc.clearDisplay(0);
+}
+
 void showGameOverMessage() {
   for (int d = 0; d < sizeof(gameOverMessage[0]) - 7; d++) {
     for (int col = 0; col < 8; col++) {
-      delay(messageSpeed);
+      delay(MESSAGE_SPEED);
       for (int row = 0; row < 8; row++) {
-        matrix.setLed(0, row, col, pgm_read_byte(&(gameOverMessage[row][col + d])));
+        lc.setLed(0, row, col, pgm_read_byte(&(gameOverMessage[row][col + d])));
       }
     }
   }
+  lc.clearDisplay(0);
 }
 
-// عرض رسالة "WIN" (غير مطبقة بعد)
-void showWinMessage() {
-  // TODO: تنفيذ هذه الوظيفة
-}
-
-// عرض رسالة "SCORE" مع الأرقام
 void showScoreMessage(int score) {
   if (score < 0 || score > 99) return;
-
-  // تحديد أرقام النقاط
   int second = score % 10;
   int first = (score / 10) % 10;
 
   for (int d = 0; d < sizeof(scoreMessage[0]) + 2 * sizeof(digits[0][0]); d++) {
     for (int col = 0; col < 8; col++) {
-      delay(messageSpeed);
+      delay(MESSAGE_SPEED);
       for (int row = 0; row < 8; row++) {
         if (d <= sizeof(scoreMessage[0]) - 8) {
-          matrix.setLed(0, row, col, pgm_read_byte(&(scoreMessage[row][col + d])));
+          lc.setLed(0, row, col, pgm_read_byte(&(scoreMessage[row][col + d])));
         }
-
-        int c = col + d - sizeof(scoreMessage[0]) + 6; // تحريك 6 بكسل أمام الرسالة السابقة
-
-        // إذا كانت النقاط < 10، يتم إزاحة الرقم الأول (صفر)
+        int c = col + d - sizeof(scoreMessage[0]) + 6;
         if (score < 10) c += 8;
-
         if (c >= 0 && c < 8) {
-          if (first > 0) matrix.setLed(0, row, col, pgm_read_byte(&(digits[first][row][c]))); // عرض الرقم الأول إذا كانت النقاط >= 10
+          if (first > 0) lc.setLed(0, row, col, pgm_read_byte(&(digits[first][row][c])));
         } else {
           c -= 8;
           if (c >= 0 && c < 8) {
-            matrix.setLed(0, row, col, pgm_read_byte(&(digits[second][row][c]))); // عرض الرقم الثاني دائمًا
+            lc.setLed(0, row, col, pgm_read_byte(&(digits[second][row][c])));
           }
         }
       }
     }
   }
+  lc.clearDisplay(0);
 }
 
-// دالة map مخصصة للتعامل مع الأعداد العشرية
-float mapf(float x, float in_min, float in_max, float out_min, float out_max) {
-  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
-}
-
-// تشغيل صوت البداية
-void startSound() {
-  beep(c, 200);
-  beep(d, 200);
-  beep(f, 200);
-  beep(gS, 800);
-  beep(gSH, 32);
-  beep(gH, 17);
-  beep(fSH, 12);
-  beep(fH, 12);    
-  beep(fSH, 25);
-}
-
-// تشغيل صوت انتهاء اللعبة
-void gamoverSound() {
-  beep(f, 200);
-  beep(f, 200);
-  beep(f, 200);
-  beep(c, 800);
-  beep(gSH, 32);
-  beep(gH, 27);
-  beep(fSH, 22);
-  beep(fH, 22);    
-  beep(fSH, 25);
-}
-
-// تشغيل نغمة معينة
-void beep(int note, int duration) {
-  tone(Pin::buzzerPin, note, duration);
-  delay(duration);
-  noTone(Pin::buzzerPin);
-  delay(10);
+void unrollSnake() {
+  lc.setLed(0, foodY, foodX, false);
+  delay(600);
+  for (int i = 1; i <= snakeLength; i++) {
+    for (int row = 0; row < 8; row++) {
+      for (int col = 0; col < 8; col++) {
+        bool found = false;
+        for (int j = 0; j < snakeLength; j++) {
+          if (snakeX[j] == col && snakeY[j] == row && j == snakeLength - i) {
+            found = true;
+            break;
+          }
+        }
+        if (found) {
+          lc.setLed(0, row, col, false);
+          delay(100);
+        }
+      }
+    }
+  }
 }
